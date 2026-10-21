@@ -3,34 +3,35 @@ import asyncio
 from aiohttp import web
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
+from telethon.tl.types import (
+    UserStatusOnline, UserStatusOffline, UserStatusRecently,
+    UserStatusLastWeek, UserStatusLastMonth,
+)
 
 # ==========================================
-# LOAD SECRETS FROM ENVIRONMENT VARIABLES
+# YOUR CREDENTIALS
 # ==========================================
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+SESSION_STRING = os.environ.get("SESSION_STRING", "")
 
-# 🛠️ FIX: Added connection_retries, retry_delay, timeout, and flood_sleep_threshold
-# This prevents the bot from freezing when Telegram rate-limits it or network drops.
+# Connect using the StringSession (No Bot Token needed!)
+# Added fixes to prevent freezing
 client = TelegramClient(
-    StringSession(), 
+    StringSession(SESSION_STRING), 
     API_ID, 
     API_HASH,
-    connection_retries=10,    # Retry connection up to 10 times if it drops
-    retry_delay=3,            # Wait 3 seconds between retries
-    request_retries=5,        # Retry requests 5 times
-    flood_sleep_threshold=60, # Automatically sleep and wait if Telegram says "FloodWait" (up to 60 seconds)
-    timeout=30                # Give up if a request takes longer than 30 seconds
+    connection_retries=10,
+    retry_delay=3,
+    flood_sleep_threshold=60,
+    timeout=30
 )
 
-# Number of members to show per page
 ITEMS_PER_PAGE = 25
 
 # Dummy web server to keep Render Web Service alive
 async def handle(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Userbot is running!")
 
 async def start_web_server():
     app = web.Application()
@@ -41,6 +42,15 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     print(f"Web server started on port {port}")
+
+def parse_user_status(status):
+    if status is None: return "Hidden"
+    if isinstance(status, UserStatusOnline): return "Online"
+    if isinstance(status, UserStatusOffline): return "Offline"
+    if isinstance(status, UserStatusRecently): return "Recently"
+    if isinstance(status, UserStatusLastWeek): return "Last Week"
+    if isinstance(status, UserStatusLastMonth): return "Last Month"
+    return "Hidden"
 
 def build_page(page_num, results, target_name):
     start_idx = page_num * ITEMS_PER_PAGE
@@ -66,29 +76,24 @@ async def scrape_command(event):
     targets = [t.strip() for t in targets_raw.split(',') if t.strip()]
 
     for target in targets:
-        status_msg = await event.reply(f"🔄 Fetching members for: {target}...\n*(If the group is large, this may take a moment)*")
+        status_msg = await event.reply(f"🔄 Fetching members for: {target}...")
         
         try:
-            # Use get_entity to resolve the group/username
             entity = await client.get_entity(target)
-        except FloodWaitError as e:
-            await status_msg.edit(f"⏳ Telegram rate limit reached. Please wait {e.seconds} seconds and try again.")
-            continue
         except Exception as e:
-            await status_msg.edit(f"❌ Failed to access {target}.\nError: {e}\n\nMake sure the bot is added to a Group and promoted to Admin.")
+            await status_msg.edit(f"❌ Failed to access {target}.\nError: {e}")
             continue
 
         lines = []
         count = 0
         
         try:
-            # BOTS ARE LIMITED TO 200 MEMBERS by Telegram
-            async for user in client.iter_participants(entity, limit=200):
+            # NO LIMIT! Fetch all members since we are a Userbot
+            async for user in client.iter_participants(entity):
                 if user.deleted or user.bot:
                     continue
                 
-                # Bots cannot see statuses. It will always be "Hidden".
-                status_str = "Hidden (Bot Restriction)"
+                status_str = parse_user_status(user.status)
                 
                 if user.username:
                     display_name = f"@{user.username}"
@@ -98,10 +103,6 @@ async def scrape_command(event):
                 
                 lines.append(f"👤 {display_name} | Status: {status_str}")
                 count += 1
-                
-        except FloodWaitError as e:
-            await status_msg.edit(f"⏳ Telegram rate limit reached while fetching. Please wait {e.seconds} seconds and try again.")
-            continue
         except Exception as e:
             await status_msg.edit(f"❌ Failed to fetch members.\nError: {e}")
             continue
@@ -134,16 +135,15 @@ async def button_handler(event):
     await event.edit(text, buttons=buttons, parse_mode='html')
 
 async def main():
-    print("Bot is starting...")
+    print("Userbot is starting...")
     
     # Start the dummy web server for Render
     await start_web_server()
     
-    # Start the bot
-    await client.start(bot_token=BOT_TOKEN)
-    print("Bot is running!")
+    # Start the Userbot (No bot_token parameter here!)
+    await client.start()
+    print("Userbot is running!")
     
-    # Keep the bot running forever
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
